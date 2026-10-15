@@ -1,0 +1,23 @@
+[project]
+name = "fin-workbench"
+version = "0.1.0"
+description = "个人 A 股财报分析工作台：筛选、对比、逐指标标注学习，判定由代码引擎给出"
+requires-python = ">=3.11"
+dependencies = [
+    "akshare",
+    "duckdb",
+    "pandas",
+    "plotly",
+    "requests",
+    "streamlit",
+]
+
+[project.scripts]
+fw-fetch = "fw.fetch:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fw"]

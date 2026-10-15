@@ -1,0 +1,33 @@
+# 两个服务不是凑数，是 DuckDB 单写者模型逼出来的：
+#   web      只读，永不联网，秒开
+#   fetcher  唯一写者，手动或定时触发
+# 二者共用 ./data 卷；取数走「复制到暂存→改→原子替换」，所以界面开着也不会被阻塞。
+services:
+  web:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      # 规则文件挂载出来，改阈值不用重新 build 镜像
+      - ./rules:/app/rules:ro
+      # 与 vest 归因管线的接缝：把它的库只读挂进来，
+      # 研究卡的 followup_queue 会自动进本工具的输入队列
+      # - ../23e78c8f/data/vest.duckdb:/app/data/vest.duckdb:ro
+    environment:
+      FW_DB: /app/data/workbench.duckdb
+      # VEST_DB_PATH: /app/data/vest.duckdb
+    restart: unless-stopped
+
+  fetcher:
+    build: .
+    profiles: ["fetch"]
+    volumes:
+      - ./data:/app/data
+      - ./rules:/app/rules:ro
+      - ./watchlist.csv:/app/data/watchlist.csv:ro
+      # - ../23e78c8f/data/vest.duckdb:/app/data/vest.duckdb:ro
+    environment:
+      FW_DB: /app/data/workbench.duckdb
+      # VEST_DB_PATH: /app/data/vest.duckdb
+    command: ["python", "-m", "fw.fetch", "--queue"]

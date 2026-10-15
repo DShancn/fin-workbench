@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# 数据库与取数缓存：本机累积资产，含个股明细，不进版本库
+data/
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# 第三方轮子只读分析产物，绝不入库
+wheels/
+
+# 个人配置
+watchlist.csv
+
+# 测试与工具缓存
+.pytest_cache/
+.coverage
+htmlcov/
+.streamlit/secrets.toml
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
