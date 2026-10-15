@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 fw-fetch = "fw.fetch:main"
 fw-brief = "fw.brief:main"
+fw-report = "fw.report:main"
 
 [build-system]
 requires = ["hatchling"]

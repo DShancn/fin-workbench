@@ -29,15 +29,51 @@
 
 ### 阈值分两种，且强制标注出处
 
-`rules/pailei.md` 里的阈值是**你定的**；`rules/notes.md` 里的经验值是**教材说的**。它们以不同标签同时呈现，冲突时以你的规则为准。
+`rules/pailei.md` 里的阈值是**你定的**；`rules/notes.md` 里的经验值是**教材说的**。冲突时以你的规则为准。
 
 这不是靠提示词去约束模型「请以用户规则为准」——那种约束在长上下文里会失效。这是**数据结构层面的保证**：每条阈值自带 `kind: user_rule | textbook`，界面上必须显示来源，模型想覆盖也覆盖不掉。
+
+目前的实际状态：`rules/pailei.md` 里的阈值全部是 `user_rule`，教材经验值以**文字注解**的形式出现在注释面板，尚未做成结构化的 `textbook` 阈值条目。真正起作用的护栏是 `Metric.decisive_threshold`——它只认 `user_rule`，所以**任何教材说法都拿不到判定权**。
 
 ---
 
 ## 快速开始
 
-### Docker（推荐）
+有三个入口，按你想要的形态挑：
+
+| 入口 | 命令 | 得到什么 | 需要装什么 |
+|---|---|---|---|
+| 一键起界面 | `./start.sh` | 交互工作台，浏览器自动打开 | 只要 Python ≥ 3.11 |
+| 导成 HTML 报告 | `fw-report --all` | 自包含静态页面，双击即开、可离线存档/发给别人 | 同上 |
+| Docker | `docker compose up -d web` | 服务化，取数与界面是两个容器 | 只要 Docker |
+
+### 0. 最省事：`./start.sh`
+
+```bash
+cp watchlist.example.csv watchlist.csv     # 编辑成你自己的池子
+./start.sh                                  # 建 venv → 装依赖 → 空库则自动取数 → 开浏览器
+./start.sh --fetch                          # 只取数，不起界面
+./start.sh --report                         # 只导 HTML 到 data/reports/
+```
+
+它幂等：已有 `.venv` 就直接复用，界面已在跑就不重复启动。日志落在 `data/streamlit.log`。
+
+### 1. 界面（Streamlit）
+
+`http://localhost:8501`。想放进任意内置浏览器/WebView 里打开就用这个地址——它是个正常的本地 web 服务，不依赖 Electron。
+
+### 2. 自包含 HTML（`fw-report`）
+
+```bash
+fw-report 600519        # 单家 → data/reports/600519.html
+fw-report --all         # 全库 + index.html（按风险分排序）
+```
+
+产出的页面**零 JS、零 CDN、样式内联**，点开指标的注释用的是原生 `<details>`。断网、拷到 U 盘、发微信文件都能打开。唯一的外链是巨潮年报 PDF。
+
+界面和 HTML 走的是同一份 `brief` 载荷，不是两套算法——改一处判定，两边同时变。
+
+### 3. Docker
 
 ```bash
 cp watchlist.example.csv watchlist.csv     # 编辑成你自己的池子
@@ -48,7 +84,9 @@ docker compose up -d web                   # 打开 http://localhost:8501
 
 改 `rules/pailei.md` 的阈值不用重新 build——它是挂载进容器的。
 
-### 本地
+⚠️ 这套 compose 文件在开发机上**没有实际 build 过**（那台机器没有容器运行时）。结构按官方写法来，但第一次 `docker compose build` 可能要修依赖，不要把它当成已验证的路径。
+
+### 手动安装（不想用 start.sh 时）
 
 需要 Python ≥ 3.11。
 
@@ -75,6 +113,9 @@ PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py" -v
 | `python -m fw.fetch --queue --force` | 已入库的也重取 |
 | `python -m fw.fetch --queue --disclosure-only` | 只补巨潮公告与 PDF 索引，不重取财务数据（省去每家 25 秒） |
 | `python -m fw.fetch --status` | 看库里已有哪些公司和年度 |
+| `fw-brief <代码>` | 打印结构化分析简报（给 agent 读的入口） |
+| `fw-report <代码>` | 导出单家公司的自包含 HTML |
+| `fw-report --all` | 全库导出 + 生成按风险分排序的 index.html |
 
 界面是只读的：**它不联网**。取数和看报告是两个进程，原因是 DuckDB 单写者（见下文架构）。
 

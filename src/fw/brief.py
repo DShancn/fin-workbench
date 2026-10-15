@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
 
 from . import config, registry, rules_loader, store
 
@@ -69,6 +72,7 @@ def build(code: str, rules=None) -> dict:
         "code": card.code,
         "name": card.name,
         "year": card.year,
+        "generated_at": datetime.now(config.CN_TZ).strftime("%Y-%m-%d %H:%M"),
         "years_available": [card.years[0], card.years[-1]],
         "authority": {
             "verdicts_by": "code",
@@ -85,9 +89,10 @@ def build(code: str, rules=None) -> dict:
         "metrics": [
             {
                 "key": m.key, "label": m.label, "value": m.value, "display": _display(m),
-                "unit": m.unit,
+                "unit": m.unit, "group": m.group,
                 "verdict": m.verdict, "rule": m.verdict_by, "reason": m.verdict_reason,
                 "formula": m.formula,
+                "inputs": {k: v for k, v in m.inputs.items() if v is not None},
                 "thresholds": [{"value": t.value, "kind": t.kind, "origin": t.origin,
                                  "label": t.label} for t in m.thresholds],
                 "learn": m.learn, "drill": m.drill,
@@ -98,7 +103,11 @@ def build(code: str, rules=None) -> dict:
             "current": card.latest_row.get("dupont"),
             "attribution": card.latest_row.get("dupont_attribution"),
         },
-        "trend": json.loads(card.trend.to_json(force_ascii=False)),
+        "trend": {
+            "columns": ["年度"] + list(card.trend.columns),
+            "rows": [[y] + [None if pd.isna(v) else float(v) for v in row]
+                     for y, row in zip(card.trend.index, card.trend.to_numpy())],
+        },
         "source_pdf": _annual_pdf(disc, card.year),
         "risk_announcements": _risk_items(disc),
         "coverage_warnings": _warnings(card),
