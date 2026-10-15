@@ -73,9 +73,22 @@ PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py" -v
 | `python -m fw.fetch <代码...>` | 取数入库。可给多个代码 |
 | `python -m fw.fetch --queue` | 按「自选池 + vest 待办队」取数 |
 | `python -m fw.fetch --queue --force` | 已入库的也重取 |
+| `python -m fw.fetch --queue --disclosure-only` | 只补巨潮公告与 PDF 索引，不重取财务数据（省去每家 25 秒） |
 | `python -m fw.fetch --status` | 看库里已有哪些公司和年度 |
 
 界面是只读的：**它不联网**。取数和看报告是两个进程，原因是 DuckDB 单写者（见下文架构）。
+
+---
+
+## 三个视图
+
+| 视图 | 干什么 | 直达链接 |
+|---|---|---|
+| 标注卡 | 单公司逐指标展开：公式、原值、阈值出处、判定理由、怎么读、去哪核对，末尾是年报与风险公告的 PDF 直链 | `?page=标注卡&code=603533` |
+| 筛选 | 全库矩阵，按 ROE / 有息负债率 / F-Score 过滤，表头点击排序 | `?page=筛选` |
+| 同业对比 | `watchlist.csv` 的 `group` 列分组内横向比较，含组内均值与质地散点 | `?page=同业对比&group=白酒` |
+
+筛选器默认**保留**缺数据的行并说明原因（银行没有有息负债率概念，「未知」不等于「不合格」）；要按缺失排除，勾「严格模式」。
 
 ---
 
@@ -137,6 +150,8 @@ src/fw/
 ├── pailei.py        规则引擎
 ├── metric.py        指标契约 —— 全工具唯一数据结构
 ├── registry.py      装配标注卡
+├── screen.py        卡片压成矩阵 —— 筛选与对比的共同底座
+├── disclosures.py   巨潮公告索引与 PDF 直链
 ├── queue.py         自选池 + vest 队列合并
 └── fetch.py         取数 CLI
 app/main.py          Streamlit 界面
@@ -164,7 +179,11 @@ Metric(key, label, value, unit, formula, inputs,     # 数值与它的来历
 
 ### 数据源
 
-单一来源：akshare 的东财三表按报告期接口（`stock_{profit|balance|cash}_flow_sheet_by_report_em`）。选它的原因是一个意外发现：**审计意见直接嵌在报表列里**（`OPINION_TYPE`），不需要额外接口——原本以为在 akshare 侧缺这一块。
+财务数据单一来源：akshare 的东财三表按报告期接口（`stock_{profit|balance|cash}_flow_sheet_by_report_em`）。选它的原因是一个意外发现：**审计意见直接嵌在报表列里**（`OPINION_TYPE`），不需要额外接口——原本以为在 akshare 侧缺这一块。
+
+公告溯源直连巨潮（`disclosures.py`），因为 akshare 的同类封装只给公告**详情页**链接、不给 PDF 直链，且把时间戳压成日期丢了精度。本项目自己解析 `adjunctUrl` 拼出 `static.cninfo.com.cn/...` 的 PDF 直链，并保留 `ts_precision`。orgId 一律走 `topSearch` 解析——按代码前缀猜会对 603xxx 之类的号段**静默返回空**。
+
+注意成本：东财三表内部按年分页，单家公司一次取数约 25 秒、60+ 个子请求；公告索引再加约 30 次请求。所以**必须落库、增量更新**，界面只读。
 
 注意成本：单家公司一张表内部分页 21 次请求，所以**必须落库、增量更新**。
 
@@ -174,10 +193,14 @@ Metric(key, label, value, unit, formula, inputs,     # 数值与它的来历
 
 - **境内数据源与本地代理冲突。** macOS 上 `urllib.request.getproxies()` 会读系统代理，把东财/巨潮的请求绕到科学上网通道，表现为随机 `SSLEOFError`、`read timeout`、以及 JSON 解析错误（`Expecting value: line 1 column 1`）。代码里已对境内域名强制绕过（`config.py`），Dockerfile 也兜了一层。**看到这个报错先怀疑代理，不要怀疑数据源。**
 - **只读 A 股。** 交易时段、报告期口径、会计准则都是中国式的。
+- **金融业报表结构与一般企业不同。** 银行/券商没有 `TOTAL_OPERATE_INCOME`（收入科目叫 `OPERATE_INCOME`），也没有营业成本与流动资产负债概念。字段映射带回退链所以营收能取到，但**毛利率、周转率、流动比率对金融业留 N/A 是正确行为**，不是数据缺失。对比页在整组皆为金融业时给出解释性提示而不是空白图。
+- **同业分组靠你自己声明。** 东财 `push2` 系行业接口从开发机不可达（根路径可连通但 `/api/qt/clist/get` 一律 RST），同花顺行业接口已加反爬 401。因此 `watchlist.csv` 用 `group` 列显式分组——「谁和谁可比」本来就是判断而不是数据，少一个随时会变的第三方分类也更可靠。
 - **F-Score 第 7 条口径退化。** akshare 三表没有加权平均股本，用期末注册股本代替（`SHARE_CAPITAL`）。对「有没有增发」这个二值判定够用，但不能拿它反推每股指标。
-- **`undetermined` 类问题存在上限。** 东财披露日期精确，但部分科目存在追溯调整，跨年对比可能不完全同口径。
-- **筛选与对比尚未实现。** 当前只完成了「单公司深度标注卡」这一条垂直切片；筛选器和同业对比页在路线图上，尚未动工。
-- **界面未做视觉验证。** 代码路径与数据装配有自动化测试覆盖，Streamlit 进程可正常启动并返回健康检查，但渲染效果未经浏览器人工确认。
+- **公告时间精度有上限。** 巨潮对多数公告只给日级精度（北京时间当地零点），因此「这条公告在股价异动前还是后」经常无法判定。工具会显式标出 `ts_precision=day` 而不是猜一个方向。
+- **比值类指标的分母符号是持续的坑。** 分母为负时比值会翻正，「越大越好」的阈值反而判通过——实测已有公司归母 -1.76 亿、扣非 -1.94 亿，比值 1.101 被判成利润成色优秀。现在派生层强制：分母非正则该比值记 N/A，交由「净利是否为正」这类前提规则裁决（`rules/pailei.md` R0.3）。**新增任何比值指标都要守这条。**
+- **Docker 链路未经真实构建验证。** 开发机没有容器运行时（docker/podman/colima/orbstack 均不可用），`Dockerfile` 与 `docker-compose.yml` 只做过人工核对——例如 Debian slim 缺 `tzdata` 会让时区锚定静默退化，这一点已写进镜像，但**整条构建没有实际跑通过**。首次 `docker compose build` 请当作可能需修来处理。
+
+界面本身已在真实浏览器中逐视图验证过：标注卡、筛选、同业对比三个视图渲染成功，注释折叠面板内容、PDF 直链、以及三种空数据分支都确认无报错。
 
 ---
 

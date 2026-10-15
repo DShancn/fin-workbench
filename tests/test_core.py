@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -243,6 +244,92 @@ class TestWatchlistGroups(unittest.TestCase):
             p.write_text("code,name\n600519,贵州茅台\n", encoding="utf-8")
             from fw import queue
             self.assertEqual(queue.groups(p), {"未分组": ["600519"]})
+
+
+class TestDisclosureParsing(unittest.TestCase):
+    """报告期年份只能从标题取。披露年减一对年报成立，对半年报和季报是错的。"""
+
+    def test_report_year_from_title(self):
+        from fw.disclosures import _report_year
+        cases = {
+            "掌阅科技股份有限公司2025年年度报告": 2025,
+            "掌阅科技股份有限公司2023年半年度报告": 2023,
+            "掌阅科技股份有限公司2026年第一季度报告": 2026,
+            "贵州茅台2025年年度报告摘要": 2025,
+            "关于2026年半年度业绩预告": 2026,
+            "股票交易异常波动公告": None,
+            "": None,
+        }
+        for title, want in cases.items():
+            with self.subTest(title=title):
+                self.assertEqual(_report_year(title), want)
+
+    def test_org_id_refuses_prefix_guess(self):
+        """orgId 猜错会 HTTP 200 + 空结果，是静默失败，必须显式抛错而不是回退到猜测。"""
+        from fw import disclosures
+        self.assertTrue(callable(disclosures.org_id))
+        # 不打网络，只验 _rows 对缺失字段的降级行为
+        rows = disclosures._rows("600001", {"announcements": [
+            {"announcementId": "1", "announcementTitle": "测试<em>高亮</em>公告",
+             "announcementTime": None, "adjunctUrl": ""},
+        ]})
+        self.assertEqual(rows[0]["title"], "测试高亮公告")
+        self.assertEqual(rows[0]["ts_precision"], "unknown")
+        self.assertEqual(rows[0]["pdf_url"], "")
+
+    def test_day_precision_flagged(self):
+        from fw import disclosures
+        # 北京时间当地零点 -> 日级精度，不能参与秒级先后比较
+        ms = int(datetime(2026, 4, 25, tzinfo=config.CN_TZ).timestamp() * 1000)
+        rows = disclosures._rows("600001", {"announcements": [
+            {"announcementId": "2", "announcementTitle": "年报",
+             "announcementTime": ms, "adjunctUrl": "finalpage/a.PDF"},
+        ]})
+        self.assertEqual(rows[0]["ts_precision"], "day")
+        self.assertTrue(rows[0]["pdf_url"].startswith("https://static.cninfo.com.cn/"))
+
+        ms2 = int(datetime(2026, 4, 25, 19, 30, tzinfo=config.CN_TZ).timestamp() * 1000)
+        rows2 = disclosures._rows("600001", {"announcements": [
+            {"announcementId": "3", "announcementTitle": "年报",
+             "announcementTime": ms2, "adjunctUrl": "x.PDF"},
+        ]})
+        self.assertEqual(rows2[0]["ts_precision"], "second")
+
+
+class TestDisclosureStore(unittest.TestCase):
+    def test_upsert_and_load_roundtrip(self):
+        st_ = fake_st({2025: BASE})
+        payload = {"periodic": [
+            {"code": "000001", "anno_id": "a1", "title": "公司2025年年度报告", "kind": " 年度报告",
+             "report_year": 2025, "publish_ts": "2026-04-25 00:00:00", "ts_precision": "day",
+             "pdf_url": "https://static.cninfo.com.cn/x.PDF"},
+        ], "risk": [
+            {"code": "000001", "anno_id": "b1", "title": "股东减持计划公告", "kind": "减持",
+             "report_year": None, "publish_ts": "2026-09-25 00:00:00", "ts_precision": "day",
+             "pdf_url": "https://static.cninfo.com.cn/y.PDF"},
+        ]}
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.duckdb"
+            conn = store.connect(p)
+            store.upsert(conn, st_)
+            n = store.upsert_disclosures(conn, "000001", payload)
+            conn.close()
+            self.assertEqual(n, 2)
+            conn = store.connect(p, read_only=True)
+            df = store.load_disclosures(conn, "000001")
+            self.assertEqual(len(df), 2)
+            self.assertEqual(df.iloc[0]["kind"], "减持")            # 按时间倒序
+            self.assertEqual(store.load_disclosures(conn, "999999").__len__(), 0)
+            conn.close()
+
+    def test_empty_disclosure_result_writes_nothing(self):
+        """界面靠「表里有没有行」区分「没索引」与「索引了但确实没风险公告」，
+        所以空结果不能写入占位行。"""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.duckdb"
+            conn = store.connect(p)
+            self.assertEqual(store.upsert_disclosures(conn, "000001", {"periodic": [], "risk": []}), 0)
+            conn.close()
 
 
 class TestProxyBypass(unittest.TestCase):

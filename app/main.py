@@ -118,11 +118,27 @@ def trend_chart(trend: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
+@st.cache_data(show_spinner=False)
+def load_disclosures(code: str):
+    conn = store.connect(read_only=True)
+    try:
+        if not store.has_data(conn, code):
+            return pd.DataFrame()
+        return store.load_disclosures(conn, code)
+    finally:
+        conn.close()
+
+
 def page_card(conn) -> None:
     codes = store.list_codes(conn)
     options = {f"{r['code']} {r['name']}": r["code"] for _, r in codes.iterrows()}
-    picked = st.selectbox("标的", list(options))
+    labels = list(options)
+    # ?code=603533 直达某只标的，便于分享与复现
+    want = st.query_params.get("code", "")
+    idx = next((i for i, l in enumerate(labels) if options[l] == want), 0)
+    picked = st.selectbox("标的", labels, index=idx, key="card_code")
     card = load_card(options[picked])
+    st.query_params["code"] = card.code
 
     if card.veto:
         st.error(
@@ -158,6 +174,42 @@ def page_card(conn) -> None:
         with tab:
             for m in groups_[name]:
                 render_metric(m)
+
+    st.subheader("原始披露核对")
+    st.caption("每个判定都应该能翻回公司自己公告的原文。下面是巨潮索引与 PDF 直链。")
+    disc = load_disclosures(card.code)
+    if disc.empty:
+        st.info(f"尚无公告索引。重跑 `python -m fw.fetch {card.code}` 会一并抓取。")
+    else:
+        periodic = disc[disc["kind"].str.contains("报告", na=False) & disc["report_year"].notna()]
+        cur = periodic[periodic["report_year"] == card.year]
+        if not cur.empty:
+            r0 = cur.iloc[0]
+            note = "　⚠️ 该记录仅日级时间精度，无法判定具体时点" if r0["ts_precision"] == "day" else ""
+            st.markdown(
+                f"📄 **{card.year} 年报原文**：[{r0['title']}]({r0['pdf_url']})　"
+                f"披露于 {str(r0['publish_ts'])[:10]}{note}"
+            )
+        else:
+            st.caption(f"未索引到 {card.year} 年年报正文（可能只有摘要，或公告索引尚未更新）")
+
+        risk = disc[~disc["kind"].str.contains("报告", na=False)].copy()
+        if not risk.empty:
+            heads = "、".join(sorted(set(risk["kind"].dropna()))[:6])
+            with st.expander(f"⚠️ 风险与异动类公告 {len(risk)} 条（{heads}）", expanded=True):
+                st.caption(
+                    "这些是产业资本与监管方的表态，与二级市场情绪经常相反——"
+                    "股价上涨期间出现减持计划或问询函，是价值判断里分量很重的一条。"
+                )
+                st.dataframe(
+                    risk[["publish_ts", "kind", "title", "pdf_url"]].rename(columns={
+                        "publish_ts": "披露时间", "kind": "类型",
+                        "title": "公告标题", "pdf_url": "PDF 直链"}),
+                    use_container_width=True, hide_index=True, height=280,
+                    column_config={"PDF 直链": st.column_config.LinkColumn(display_text="打开原文")},
+                )
+        else:
+            st.caption("近窗口内没有减持、异常波动、问询、立案、处罚或业绩预告类公告。")
 
     st.divider()
     st.markdown("**交给 AI 分析**")

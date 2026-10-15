@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import config, queue as queue_mod, sources, statements, store
+from . import config, disclosures, queue as queue_mod, sources, statements, store
 
 config.apply_proxy_bypass()
 
@@ -27,8 +27,20 @@ def _expected_year(now=None) -> int:
     return y - 1
 
 
-def fetch_one(conn, code: str, force: bool = False) -> str:
+def fetch_one(conn, code: str, force: bool = False, disclosure_only: bool = False) -> str:
     code = str(code).zfill(6)
+
+    # 只为补公告索引而重跑 25 秒的财务取数不划算，所以给一条捷径
+    if disclosure_only:
+        if not store.has_data(conn, code):
+            return f"跳过 {code}（财务数据未入库，请先正常 fetch 一次）"
+        try:
+            d = disclosures.fetch(code)
+            n = store.upsert_disclosures(conn, code, d)
+            return f"公告索引 {code}: {n} 条（定期 {len(d['periodic'])} / 风险 {len(d['risk'])}）"
+        except Exception as exc:
+            return f"公告索引失败 {code}: {type(exc).__name__}: {exc}"
+
     if not force and store.has_data(conn, code):
         row = conn.execute("SELECT last_year FROM company WHERE code=?", [code]).fetchone()
         if row and row[0] >= _expected_year():
@@ -41,7 +53,16 @@ def fetch_one(conn, code: str, force: bool = False) -> str:
 
     st = statements.build(code, tables)
     n = store.upsert(conn, st)
-    return f"入库 {code} {st.name}: {len(st.years())} 个年度 / {n} 个数值"
+    msg = f"入库 {code} {st.name}: {len(st.years())} 个年度 / {n} 个数值"
+    # 公告索引失败不牵连财务数据——但必须报出来，不能吞掉。
+    # 少了公告索引，界面上的「去年报核对」就只是文字，点不开原文。
+    try:
+        d = disclosures.fetch(code)
+        nd = store.upsert_disclosures(conn, code, d)
+        msg += f" | 公告索引 {nd} 条（定期 {len(d['periodic'])} / 风险 {len(d['risk'])}）"
+    except Exception as exc:
+        msg += f" | 公告索引失败: {type(exc).__name__}: {exc}"
+    return msg
 
 
 def _staged(main_db):
@@ -65,6 +86,8 @@ def main(argv=None) -> None:
     p.add_argument("codes", nargs="*", help="6 位代码，可多个")
     p.add_argument("--queue", action="store_true", help="取自选池 + vest 待办队列")
     p.add_argument("--force", action="store_true", help="已入库的也重取")
+    p.add_argument("--disclosure-only", action="store_true",
+                   help="只补巨潮公告索引，不重取财务数据")
     p.add_argument("--status", action="store_true", help="列出库内公司已取年度")
     p.add_argument("--inplace", action="store_true", help="直接改原库（确认没有界面在读时用）")
     args = p.parse_args(argv)
@@ -113,7 +136,7 @@ def _run(conn, args, p) -> None:
     seen = set()
     todo = [c for c in codes if not (c in seen or seen.add(c))]
     for i, code in enumerate(todo, 1):
-        print(f"[{i}/{len(todo)}] {fetch_one(conn, code, args.force)}", flush=True)
+        print(f"[{i}/{len(todo)}] {fetch_one(conn, code, args.force, args.disclosure_only)}", flush=True)
 
 
 if __name__ == "__main__":

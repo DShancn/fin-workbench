@@ -41,6 +41,21 @@ CREATE TABLE IF NOT EXISTS audit_opinion (
     opinion VARCHAR,
     PRIMARY KEY (code, year)
 );
+
+-- 巨潮公告索引。存元数据与 PDF 直链，不存正文：
+-- 目的是让每个判定旁边都能翻到公司自己的原始披露，而不是让工具变成文档库。
+CREATE TABLE IF NOT EXISTS disclosure (
+    code         VARCHAR NOT NULL,
+    anno_id      VARCHAR NOT NULL,
+    title        VARCHAR,
+    kind         VARCHAR,
+    report_year  INTEGER,
+    publish_ts   TIMESTAMP,
+    ts_precision VARCHAR,
+    pdf_url      VARCHAR,
+    fetched_at   TIMESTAMP,
+    PRIMARY KEY (code, anno_id)
+);
 """
 
 
@@ -114,6 +129,38 @@ def load(conn: duckdb.DuckDBPyConnection, code: str) -> Statements:
 def list_codes(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     return conn.execute(
         "SELECT code, name, first_year, last_year, fetched_at FROM company ORDER BY code"
+    ).fetch_df()
+
+
+def upsert_disclosures(conn: duckdb.DuckDBPyConnection, code: str,
+                       result: dict[str, list[dict]]) -> int:
+    rows = []
+    for group in ("periodic", "risk"):
+        for r in result.get(group, []):
+            rows.append(
+                (
+                    code,
+                    r["anno_id"],
+                    r["title"],
+                    r.get("kind", ""),
+                    r.get("report_year"),
+                    r["publish_ts"] or None,
+                    r["ts_precision"],
+                    r["pdf_url"],
+                )
+            )
+    if rows:
+        conn.executemany(
+            "INSERT OR REPLACE INTO disclosure VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())", rows
+        )
+    return len(rows)
+
+
+def load_disclosures(conn: duckdb.DuckDBPyConnection, code: str) -> pd.DataFrame:
+    return conn.execute(
+        """SELECT title, kind, report_year, publish_ts, ts_precision, pdf_url
+           FROM disclosure WHERE code = ? ORDER BY publish_ts DESC""",
+        [str(code).zfill(6)],
     ).fetch_df()
 
 
