@@ -42,8 +42,14 @@ _CMP = {"lte": _cmp_lte, "gte": _cmp_gte, "eq": _cmp_eq}
 
 def apply_rule(rule: Rule, derived: dict, period: str) -> Metric:
     meta = FIELD_META.get(rule.field)
-    value = derived.get(rule.field)
+    raw = derived.get(rule.field)
     unit = meta.unit if meta else "ratio"
+
+    # 原始金额按亿展示，阈值也按亿写，比较前必须统一到同一量纲；
+    # 否则 -1.76 亿会被显示成 -17,600,000,000%
+    scale = 1e8 if unit == "cny_yi" else 1
+    value = None if raw is None else (str(raw) if unit == "str" else float(raw) / scale)
+
     m = Metric(
         key=rule.field,
         label=meta.label if meta else rule.field,
@@ -56,7 +62,7 @@ def apply_rule(rule: Rule, derived: dict, period: str) -> Metric:
         learn=[rule.learn] if rule.learn else [],
         note=rule.label,
     )
-    m.value = value if unit == "str" else (None if value is None else float(value))
+    m.value = value
     if rule.warn is not None:
         m.thresholds.append(Threshold(rule.warn, "user_rule", f"pailei.md {rule.id}", rule.check, "关注线"))
     if rule.fail is not None:

@@ -14,7 +14,7 @@ import pandas as pd
 
 from fw import config, derive, registry, rules_loader, store
 from fw.fscore import eval_fscore, summarize
-from fw.metric import NA, PASS, Metric
+from fw.metric import FAIL, NA, PASS, Metric
 from fw.pailei import apply_rule, evaluate
 from fw.ratios import dupont_analysis, dupont_attribution, gross_margin, return_on_equity
 from fw.statements import Statements
@@ -139,6 +139,38 @@ class TestFscoreCoverage(unittest.TestCase):
         a = derive.derive(pd.Series(prev), None)
         b = derive.derive(pd.Series(BASE), a)
         self.assertEqual(summarize(eval_fscore(b, a))["judged"], 9)
+
+
+class TestNegativeProfit(unittest.TestCase):
+    """真实缺陷回归：掌阅科技 2025 归母 -1.76 亿、扣非 -1.94 亿，
+    比值 1.101 为正且大于 1，被误判成「利润成色优秀 PASS」。
+    两家都亏时这个比率没有含义。"""
+
+    LOSS = {**BASE, "parent_profit": -1.76e8, "deduct_profit": -1.94e8, "net_profit": -1.70e8}
+
+    def test_loss_making_ratio_is_not_computable(self):
+        d = derive.derive(pd.Series(self.LOSS), None)
+        self.assertIsNone(d["deducted_gap_ratio"])
+
+    def test_loss_making_fails_layer0(self):
+        rules = [r for r in rules_loader.load_rules(RULES) if r.id == "R0.3"]
+        self.assertTrue(rules, "规则文件缺 R0.3 归母净利为正")
+        d = derive.derive(pd.Series(self.LOSS), None)
+        metrics, summary = evaluate(rules, d, "2025")
+        self.assertEqual(metrics[0].verdict, FAIL)
+        self.assertTrue(summary["veto"], "亏损应进入一票否决层")
+
+    def test_cny_yi_thresholds_use_yi_scale(self):
+        """金额类阈值按亿表达，比较前必须同量纲，否则 -1.76 亿显示成天文数字。"""
+        rule = rules_loader.Rule(id="R0.3", label="x", field="parent_profit", check="gte", fail=0.0)
+        d = derive.derive(pd.Series(self.LOSS), None)
+        m = apply_rule(rule, d, "2025")
+        self.assertAlmostEqual(m.value, -1.76, places=2)
+        self.assertEqual(m.to_display(), "-1.76 亿")
+
+    def test_profitable_company_ratio_still_computes(self):
+        d = derive.derive(pd.Series(BASE), None)
+        self.assertAlmostEqual(d["deducted_gap_ratio"], 170.0 / 180.0, places=6)
 
 
 class TestProxyBypass(unittest.TestCase):

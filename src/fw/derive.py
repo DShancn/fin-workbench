@@ -49,6 +49,10 @@ FIELD_META: dict[str, FieldMeta] = {
         "应收−营收增速差", "ratio", "应收账款同比 − 营业总收入同比", "资产质量"),
     "inventory_revenue_gap": FieldMeta(
         "存货−营收增速差", "ratio", "存货同比 − 营业总收入同比", "资产质量"),
+    # 规则也可以直接判原始额（如「净利必须为正」），此时单位必须是 cny_yi，
+    # 否则界面会把「-176,000,000 元」当比率格式化成 -17600000000%
+    "parent_profit": FieldMeta("归母净利润", "cny_yi", "利润表 · 归属于母公司所有者的净利润", "盈利质量"),
+    "deduct_profit": FieldMeta("扣非归母净利润", "cny_yi", "利润表 · 扣除非经常性损益后的净利润", "盈利质量"),
 }
 
 # 注释面板展示「这个数由哪些原值算出来」，让人能自己复核而不只是相信工具。
@@ -133,7 +137,10 @@ def derive(cur, prev, opinion: str | None = None) -> dict:
     d.update({
         # 盈利质量
         "audit_opinion": opinion or "未披露",
-        "deducted_gap_ratio": _safe_div(deduct, parent),
+        # 分母为负时「扣非/归母」会翻正且大于 1：实测掌阅科技 2025 归母 -1.76 亿、
+        # 扣非 -1.94 亿，比值 1.101，被误判成利润成色优秀。亏损公司的这个比率
+        # 没有含义，一律置 None，由 R0.3「归母净利为正」去裁决。
+        "deducted_gap_ratio": _safe_div(deduct, parent) if (parent is not None and parent > 0) else None,
         # 杠杆与结构
         "goodwill_ratio": _safe_div(g("goodwill"), equity),
         "debt_to_assets": _safe_div(g("total_liab"), assets),
