@@ -154,6 +154,44 @@ def page_card(conn) -> None:
     s = card.fscore_summary
     c5.metric("F-Score", f"{s['score']}/9", help=f"判定覆盖 {s['judged']}/9")
 
+    r = card.risk
+    st.subheader("排雷风险分")
+    if r.get("score") is None:
+        st.warning(f"无法评级：{r.get('note', '没有可判定的指标组')}")
+    else:
+        g1, g2, g3 = st.columns([1, 1, 3])
+        if r.get("veto"):
+            g1.metric("风险分", "已作废", help="命中一票否决层，0-100 的分数不再可比，故不予展示")
+        else:
+            g1.metric("风险分", f"{r['score']}/100",
+                      help="按组加权的通过率。N/A 指标不参与加权，所以分数只反映覆盖到的维度")
+        g2.metric("评级", r["band"], help="命中一票否决层则直接标「排除」，不看分数")
+        with g3:
+            st.markdown("**各组得分与权重**")
+            st.dataframe(
+                pd.DataFrame([
+                    {"维度": k, "权重": v["weight"], "得分": v["score"],
+                     "可判定": f"{v['judged']}/{v['total']}"}
+                    for k, v in sorted(r["groups"].items(), key=lambda kv: -kv[1]["weight"])
+                ]),
+                hide_index=True, use_container_width=True, height=190,
+            )
+        cov = r.get("coverage", 1.0)
+        if cov is not None and cov < 0.85:
+            st.caption(
+                f"⚠️ 评分覆盖 {cov:.0%}（{r['covered_weight']}/{r['total_weight']} 权重）——"
+                f"有维度算不出来，此分数不宜与覆盖更高的标的直接比较。"
+            )
+        if r.get("veto"):
+            st.error("一票否决命中：" + "；".join(v["label"] + "（" + v["rule"] + "）" for v in r["veto"]))
+        st.caption(
+            "分数只表示**这 11 条规则没有报警**，不是「好公司」的意思：满分说明它躲过了"
+            "审计意见、利润成色、商誉、杠杆、现金流质量这几类硬伤，不涉及成长性、护城河或估值。"
+            "想看生意本身好不好，去下面的杜邦分量与逐年趋势。"
+        )
+        if r.get("note"):
+            st.caption(r["note"])
+
     st.subheader("Piotroski F-Score")
     if s["na"]:
         st.caption(f"其中 {s['na']} 条因数据不足无法判定，得分已被低估")
@@ -262,12 +300,18 @@ def page_screen() -> None:
 
     unknown = int(view[["ROE", "有息负债率"]].isna().any(axis=1).sum())
 
-    shown = ["名称", "分组", "年度", "营收(亿)", "归母净利(亿)", "毛利率", "净利率", "ROE",
+    shown = ["名称", "分组", "年度", "风险分", "评级", "评分覆盖", "短板",
+             "营收(亿)", "归母净利(亿)", "毛利率", "净利率", "ROE",
              "周转率", "权益乘数", "现金流/利润", "资产负债率", "有息负债率",
              "商誉/净资产", "扣非/归母", "流动比率", "F-Score", "通过", "关注", "警示",
              "无法判定", "一票否决", "否决项"]
     cols = [c for c in shown if c in view]
     cfg = {c: st.column_config.NumberColumn(format="%.2f%%") for c in cols if c in PCT_COLS}
+    cfg["评分覆盖"] = st.column_config.NumberColumn(
+        "评分覆盖", format="%.0f%%",
+        help="参与加权的权重占比。覆盖低说明很多指标算不出来，"
+             "此时分数只反映少数维度，不能与高覆盖的分数直接比较。")
+    cfg["风险分"] = st.column_config.ProgressColumn("风险分", min_value=0, max_value=100, format="%.1f")
     for c in ("营收(亿)", "归母净利(亿)", "经营现金流(亿)"):
         if c in cols:
             cfg[c] = st.column_config.NumberColumn(format="%,.1f")
@@ -321,10 +365,11 @@ def page_compare() -> None:
         st.warning("组内不足两只，无法对比。先把该组标的取数入库。")
         return
 
-    metric_cols = [c for c in ["营收(亿)", "归母净利(亿)", "毛利率", "净利率", "ROE",
+    metric_cols = [c for c in ["风险分", "营收(亿)", "归母净利(亿)", "毛利率", "净利率", "ROE",
                               "周转率", "权益乘数", "现金流/利润", "资产负债率",
                               "有息负债率", "商誉/净资产", "扣非/归母", "流动比率", "F-Score"]
                    if c in sub.columns]
+    sub = sub.sort_values("风险分", ascending=False) if "风险分" in sub.columns else sub
 
     table = sub[["名称"] + metric_cols].copy()
     avg = sub[metric_cols].mean(numeric_only=True)
@@ -341,7 +386,7 @@ def page_compare() -> None:
     st.subheader("组内横向比较")
     bar_dim = st.selectbox(
         "比较维度",
-        [c for c in ("毛利率", "ROE", "净利率", "周转率", "现金流/利润", "有息负债率", "F-Score")
+        [c for c in ("风险分", "毛利率", "ROE", "净利率", "周转率", "现金流/利润", "有息负债率", "F-Score")
          if c in metric_cols],
     )
     plot_df = sub[["名称", bar_dim]].dropna().sort_values(bar_dim)

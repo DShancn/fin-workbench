@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import scoring
 from .derive import COMPONENTS, FIELD_META, derive
 from .fscore import RuleResult, eval_fscore, summarize
 from .metric import NA, PASS, WARN, Metric
@@ -44,6 +45,7 @@ class Card:
     summary: dict
     trend: pd.DataFrame
     latest_row: dict
+    risk: dict = field(default_factory=dict)
 
     @property
     def veto(self) -> list[Metric]:
@@ -142,6 +144,7 @@ def build_card(st, rules, notes: dict[str, str] | None = None, years_back: int =
         code=st.code, name=getattr(st, "name", "") or st.code, year=year, years=years,
         metrics=metrics, fscore=results, fscore_summary=summarize(results),
         summary=summary, trend=trend, latest_row={k: v for k, v in derived.items() if k != "dupont"},
+        risk=scoring.score_metrics(metrics),
     )
 
 

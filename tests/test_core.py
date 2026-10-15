@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from fw import config, derive, registry, rules_loader, store
+from fw import config, derive, registry, rules_loader, scoring, store
 from fw.fscore import eval_fscore, summarize
-from fw.metric import FAIL, NA, PASS, Metric
+from fw.metric import FAIL, NA, PASS, WARN, Metric
 from fw.pailei import apply_rule, evaluate
 from fw.ratios import dupont_analysis, dupont_attribution, gross_margin, return_on_equity
 from fw.statements import Statements
@@ -330,6 +330,87 @@ class TestDisclosureStore(unittest.TestCase):
             conn = store.connect(p)
             self.assertEqual(store.upsert_disclosures(conn, "000001", {"periodic": [], "risk": []}), 0)
             conn.close()
+
+
+class TestScoring(unittest.TestCase):
+    def _m(self, group, verdict, by="R1.1"):
+        return Metric(key="k", label="L", period="2025", engine="pailei",
+                      group=group, verdict=verdict, verdict_by=by)
+
+    def test_layer_weights_sum_to_100(self):
+        self.assertEqual(sum(scoring.LAYER_WEIGHTS.values()), 100)
+
+    def test_all_pass_is_100(self):
+        ms = [self._m(g, PASS) for g in ("盈利质量", "现金流质量", "资产质量", "杠杆")]
+        r = scoring.score_metrics(ms)
+        self.assertEqual(r["score"], 100.0)
+        self.assertEqual(r["band"], "优")
+
+    def test_na_does_not_inflate_and_lowers_coverage(self):
+        """关键性质：大量 N/A 不能让分数看起来像满分。
+
+        只有一组可判定为 PASS、其余全 N/A 时，分数确实是 100（覆盖到的维度全过），
+        但 coverage 必须显著小于 1，界面据此禁止与高覆盖标的直接比较。
+        """
+        ms = [self._m("盈利质量", PASS), self._m("现金流质量", NA), self._m("杠杆", NA)]
+        r = scoring.score_metrics(ms)
+        self.assertLess(r["coverage"], 0.6)
+        self.assertEqual(r["covered_weight"], scoring.LAYER_WEIGHTS["盈利质量"])
+        self.assertLess(r["covered_weight"], r["total_weight"])
+
+    def test_warn_is_half(self):
+        ms = [self._m("盈利质量", PASS), self._m("盈利质量", WARN)]
+        r = scoring.score_metrics(ms)
+        self.assertAlmostEqual(r["groups"]["盈利质量"]["score"], 75.0, places=1)
+
+    def test_layer0_fail_forces_exclude_band(self):
+        """命中一票否决时不看分数——否则一个 78 分会盖掉「审计意见非标」这种结论。"""
+        ms = [self._m(g, PASS) for g in ("现金流质量", "资产质量", "杠杆")]
+        ms.append(self._m("报表可信度", FAIL, by="R0.1"))
+        r = scoring.score_metrics(ms)
+        self.assertEqual(r["band"], "排除")
+        self.assertTrue(r["veto"])
+
+    def test_no_judgable_metrics_gives_no_score(self):
+        r = scoring.score_metrics([self._m("盈利质量", NA), self._m("杠杆", NA)])
+        self.assertIsNone(r["score"])
+        self.assertEqual(r["band"], "无法评级")
+        self.assertEqual(r["coverage"], 0.0)
+
+    def test_empty_metrics_list_is_safe(self):
+        r = scoring.score_metrics([])
+        self.assertIsNone(r["score"])
+        self.assertEqual(r["coverage"], 0.0)
+
+    def test_worst_group_points_at_weakest(self):
+        ms = [self._m("盈利质量", PASS), self._m("杠杆", FAIL)]
+        r = scoring.score_metrics(ms)
+        self.assertEqual(scoring.worst_group(r), "杠杆")
+
+    def test_real_cards_have_score_and_coverage(self):
+        """真实数据上分数与覆盖率都应有值，且亏损公司评级不高于健康公司。
+
+        别人 clone 下来没取过数，这种情况直接跳过而不是让测试变红。
+        """
+        db = Path(store.config.DB_PATH)
+        if not db.exists():
+            self.skipTest(f"未找到 {db}，先跑 python -m fw.fetch 600519 603533")
+        conn = store.connect(db, read_only=True)
+        try:
+            have = set(store.list_codes(conn)["code"])
+            if not {"600519", "603533"} <= have:
+                self.skipTest("本机未取这两只标的")
+            healthy = registry.build_card(store.load(conn, "600519"), self_rules(), {})
+            loser = registry.build_card(store.load(conn, "603533"), self_rules(), {})
+        finally:
+            conn.close()
+        self.assertIsNotNone(healthy.risk["score"])
+        self.assertEqual(loser.risk["band"], "排除", "归母为负应触发一票否决")
+        self.assertLess(loser.risk["score"], healthy.risk["score"])
+
+
+def self_rules():
+    return rules_loader.load_rules(RULES)
 
 
 class TestProxyBypass(unittest.TestCase):

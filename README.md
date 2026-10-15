@@ -80,6 +80,29 @@ PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py" -v
 
 ---
 
+## Agent 分析层
+
+本项目**不内嵌 LLM 调用**。没有 API key、没有模型绑定、没有额外的网络失败面。
+
+做法是把「事实与约束」打包交出去，推理留给任意 agent：
+
+```bash
+fw-brief 600519 --markdown     # 人读的分析简报
+fw-brief 600519                # 结构化 JSON，字段更全
+```
+
+简报除了数值，还随数据带两段元信息：`authority`（声明这些判定由代码算出）和 `constraints`（七条行为契约）。这不是文档，是**传给模型的约束**——少了它，模型很容易拿着 `verdict` 又去推翻它。
+
+`skill/fin-workbench-brief/` 是配套技能，让 agent 被触发时自动遵守这些纪律：不推翻判定、引用阈值必带规则编号与出处、覆盖率低时禁止横向比较、拒绝仓位与目标价。装上它以后，你只要对 agent 说一句「600519 财务上怎么样」。
+
+```bash
+cp -R skill/fin-workbench-brief ~/.qoder/skills/
+```
+
+一个值得留意的现象：**风险分与 F-Score 打架往往最有信息量**。前者量当前质地，后者量同比动量，所以「在变好」和「现在好」会给出相反的数字。这不是数据矛盾，别挑一个信。
+
+---
+
 ## 三个视图
 
 | 视图 | 干什么 | 直达链接 |
@@ -148,14 +171,17 @@ src/fw/
 ├── fscore.py        Piotroski 九条
 ├── rules_loader.py  rules/pailei.md 解析，严格失败
 ├── pailei.py        规则引擎
+├── scoring.py       分层加权风险分（按覆盖权重归一）
 ├── metric.py        指标契约 —— 全工具唯一数据结构
 ├── registry.py      装配标注卡
 ├── screen.py        卡片压成矩阵 —— 筛选与对比的共同底座
 ├── disclosures.py   巨潮公告索引与 PDF 直链
+├── brief.py         分析简报：把卡片交给 agent（含行为约束）
 ├── queue.py         自选池 + vest 队列合并
 └── fetch.py         取数 CLI
-app/main.py          Streamlit 界面
+app/main.py          Streamlit 界面（标注卡 / 筛选 / 同业对比）
 rules/               pailei.md（你的规则）、notes.md（知识注解）
+skill/               Qoder 技能：让 agent 遵守「只解释不裁决」的纪律
 ```
 
 ### 为什么是两个服务

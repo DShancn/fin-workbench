@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from . import registry, store
+from . import registry, scoring, store
 
 # (列名, 指标 key, 是否按亿缩放)
 RATIO_COLS = [
@@ -43,10 +43,18 @@ def one_row(conn, code: str, rules, notes) -> dict | None:
     except (KeyError, ValueError):
         return None
 
+    risk = card.risk or {}
+    vetoed = bool(risk.get("veto"))
     row = {
         "代码": card.code,
         "名称": card.name,
         "年度": card.year,
+        # 命中一票否决时分数作废：被排除的公司与健康的公司共用一把 0-100 的尺子，
+        # 排序会把 76 分的「排除」放到 77 分的「良」旁边，等于把否决结论稀释掉了。
+        "风险分": None if vetoed else risk.get("score"),
+        "评级": risk.get("band", "—"),
+        "评分覆盖": risk.get("coverage") if not vetoed else None,
+        "短板": None if vetoed else (scoring.worst_group(risk) if risk else None),
         "通过": card.summary["pass"],
         "关注": card.summary["warn"],
         "警示": card.summary["fail"],

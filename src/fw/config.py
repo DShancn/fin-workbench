@@ -59,8 +59,13 @@ def data_dir() -> Path:
 
 DB_PATH = Path(os.environ.get("FW_DB", str(data_dir() / "workbench.duckdb")))
 
+ROOT = Path(__file__).resolve().parents[2]
+
+# 规则与知识文件放项目根：它们要进版本库、要挂载进容器、要手改，不属于 data/
+RULES_PATH = Path(os.environ.get("FW_RULES", str(ROOT / "rules" / "pailei.md")))
+NOTES_PATH = ROOT / "rules" / "notes.md"
+
 # 自选池放在项目根而不是 data/ 下：它是用户要看得见、要亲手编辑的配置文件，
 # 而 data/ 整个被 gitignore。compose 也按根目录挂载。
-ROOT = Path(__file__).resolve().parents[2]
 WATCHLIST_FILE = Path(os.environ.get("FW_WATCHLIST", str(ROOT / "watchlist.csv")))
 VEST_DB = Path(os.environ["VEST_DB_PATH"]) if os.environ.get("VEST_DB_PATH") else None
