@@ -202,7 +202,14 @@ def main(argv=None) -> None:
     p.add_argument("--out", help="写入文件而不是 stdout")
     args = p.parse_args(argv)
 
-    b = build(args.code)
+    try:
+        b = build(args.code)
+    except FileNotFoundError as exc:
+        # 这是新人 clone 后第一个会撞上的错误：给出可执行的下一步，而不是 traceback
+        p.error(str(exc))
+    except KeyError as exc:
+        p.error(f"该标的尚未入库：{exc}")
+
     text = to_markdown(b) if args.markdown else json.dumps(b, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")

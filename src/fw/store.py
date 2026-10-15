@@ -64,8 +64,8 @@ def connect(path=None, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     if read_only:
         if not p.exists():
             raise FileNotFoundError(
-                f"数据库 {p} 不存在。先执行 `python -m fw.fetch <代码>` 取数，"
-                "再启动界面（界面以只读模式打开，不联网）。"
+                f"数据库 {p} 不存在。先执行 `python -m fw.fetch <代码>` 或 "
+                "`fw-fetch --queue` 取数——界面与命令行工具都只读，不联网。"
             )
         return duckdb.connect(str(p), read_only=True)
     p.parent.mkdir(parents=True, exist_ok=True)
