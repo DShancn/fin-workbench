@@ -11,8 +11,11 @@ from __future__ import annotations
 # 下列映射经 2026-10-15 对 sh600519 实测确认，未命中的键会取首个包含匹配。
 
 PROFIT_MAP = {
-    "revenue": "TOTAL_OPERATE_INCOME",      # 营业总收入
-    "net_cogs": "OPERATE_COST",              # 营业成本
+    # 值可以是候选元组，按顺序取第一个命中的列。
+    # 银行/券商报表模板里没有 TOTAL_OPERATE_INCOME，收入科目叫 OPERATE_INCOME
+    # （另有 INTEREST_INCOME、FEE_COMMISSION_INCOME 等分项），实测 600036 即如此。
+    "revenue": ("TOTAL_OPERATE_INCOME", "OPERATE_INCOME"),
+    "net_cogs": "OPERATE_COST",              # 营业成本；金融业无此科目，留空不硬凑
     "net_profit": "NETPROFIT",               # 净利润（含少数股东）
     "parent_profit": "PARENT_NETPROFIT",     # 归母净利润
     "deduct_profit": "DEDUCT_PARENT_NETPROFIT",  # 扣非归母

@@ -173,6 +173,78 @@ class TestNegativeProfit(unittest.TestCase):
         self.assertAlmostEqual(d["deducted_gap_ratio"], 170.0 / 180.0, places=6)
 
 
+class TestScreenMatrix(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "m.duckdb"
+        conn = store.connect(self.path)
+        for code, over in (("600001", {}), ("600002", {"parent_profit": -5e7})):
+            base = {**BASE, **over}
+            ann = pd.DataFrame(
+                [{**base, "year": y} for y in (2024, 2025)],
+                columns=sorted(set(base) | {"year"}),
+            ).set_index("year").sort_index()
+            ann["avg_total_assets"] = ann["total_assets"]
+            ann["avg_parent_equity"] = ann["parent_equity"]
+            store.upsert(conn, Statements(code=code, annual=ann, name=f"公司{code[-1]}"))
+        conn.close()
+        self.rules = rules_loader.load_rules(RULES)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_matrix_shape_and_columns(self):
+        from fw import screen
+        conn = store.connect(self.path, read_only=True)
+        try:
+            m = screen.matrix(conn, self.rules, {}, groups={"组A": ["600001", "600002"]})
+        finally:
+            conn.close()
+        self.assertEqual(len(m), 2)
+        for col in ("名称", "分组", "ROE", "毛利率", "F-Score", "警示", "一票否决"):
+            self.assertIn(col, m.columns)
+        self.assertEqual(set(m["分组"]), {"组A"})
+
+    def test_loss_making_company_flagged_in_matrix(self):
+        """矩阵必须能把亏损公司标出来，否则筛选器会把它排在好公司前面。"""
+        from fw import screen
+        conn = store.connect(self.path, read_only=True)
+        try:
+            m = screen.matrix(conn, self.rules, {})
+        finally:
+            conn.close()
+        loser = m.loc["600002"]
+        self.assertEqual(loser["一票否决"], "是")
+        self.assertLess(loser["归母净利(亿)"], 0)
+        self.assertEqual(m.loc["600001"]["一票否决"], "")
+
+    def test_missing_company_is_skipped_not_padded(self):
+        from fw import screen
+        conn = store.connect(self.path, read_only=True)
+        try:
+            m = screen.matrix(conn, self.rules, {}, codes=["600001", "999999"])
+        finally:
+            conn.close()
+        self.assertEqual(len(m), 1, "未入库代码应被跳过而不是造出一行空值")
+
+
+class TestWatchlistGroups(unittest.TestCase):
+    def test_group_column_preserved(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "w.csv"
+            p.write_text("code,name,group\n600519,贵州茅台,白酒\n000001,平安银行,\n", encoding="utf-8")
+            from fw import queue
+            g = queue.groups(p)
+            self.assertEqual(g, {"白酒": ["600519"], "未分组": ["000001"]})
+
+    def test_missing_group_column_still_loads(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "w.csv"
+            p.write_text("code,name\n600519,贵州茅台\n", encoding="utf-8")
+            from fw import queue
+            self.assertEqual(queue.groups(p), {"未分组": ["600519"]})
+
+
 class TestProxyBypass(unittest.TestCase):
     def test_cn_hosts_in_no_proxy(self):
         config.apply_proxy_bypass()

@@ -17,15 +17,23 @@ from . import config
 
 def load_watchlist(path: Path | None = None) -> pd.DataFrame:
     p = path or config.WATCHLIST_FILE
+    cols = ["code", "name", "group", "source"]
     if not p.exists():
-        return pd.DataFrame(columns=["code", "name", "source"])
+        return pd.DataFrame(columns=cols)
     df = pd.read_csv(p, dtype=str).fillna("")
     if "code" not in df.columns:
         raise ValueError(f"{p} 缺 code 列。最少格式：code,name")
     df["code"] = df["code"].str.strip().str.zfill(6)
+    if "name" not in df.columns:
+        df["name"] = ""
+    # group 是对比视图的分组依据。东财行业接口从本网络不可达（push2 系被 RST），
+    # 所以分组由用户显式声明——比依赖一个随时会变的第三方分类更可靠，
+    # 而且「谁和谁可比」本来就是判断，不是数据。
+    if "group" not in df.columns:
+        df["group"] = ""
     if "source" not in df.columns:
         df["source"] = "watchlist"
-    return df[["code", "name", "source"]]
+    return df[cols]
 
 
 def load_vest_queue(vest_db: Path | None = None) -> pd.DataFrame:
@@ -69,20 +77,30 @@ def load_vest_queue(vest_db: Path | None = None) -> pd.DataFrame:
 
 
 def merged_queue(vest_db: Path | None = None) -> pd.DataFrame:
+    cols = ["code", "name", "group", "source", "question"]
     wl = load_watchlist()
     wl["question"] = ""
     vq = load_vest_queue(vest_db)
     if vq.empty:
-        return wl[["code", "name", "source", "question"]]
+        return wl[cols]
 
+    vq["group"] = ""
     both = pd.concat([wl, vq], ignore_index=True)
     # 同一只股票可能既在自选池又被归因队提出，保留两个来源，问题文本合并展示
-    agg = (
-        both.groupby("code", as_index=False)
-        .agg(
-            name=("name", lambda s: next((x for x in s if x), "")),
-            source=("source", lambda s: " + ".join(sorted(set(x for x in s if x)))),
-            question=("question", lambda s: " | ".join(x for x in s if x)),
-        )
+    agg = both.groupby("code", as_index=False).agg(
+        name=("name", lambda s: next((x for x in s if x), "")),
+        group=("group", lambda s: next((x for x in s if x), "")),
+        source=("source", lambda s: " + ".join(sorted(set(x for x in s if x)))),
+        question=("question", lambda s: " | ".join(x for x in s if x)),
     )
-    return agg
+    return agg[cols]
+
+
+def groups(path: Path | None = None) -> dict[str, list[str]]:
+    """分组名 -> 代码列表，供对比视图使用。"""
+    df = load_watchlist(path)
+    out: dict[str, list[str]] = {}
+    for _, r in df.iterrows():
+        key = r["group"] or "未分组"
+        out.setdefault(key, []).append(r["code"])
+    return out

@@ -23,18 +23,29 @@ def _canonical(df: pd.DataFrame, colmap: dict[str, str], table: str) -> pd.DataF
     out["notice_date"] = pd.to_datetime(notice, errors="coerce")
 
     available = set(df.columns)
-    for canonical, raw in colmap.items():
-        if canonical in ("notice_date",):
+    unmatched: list[str] = []
+    for canonical, want in colmap.items():
+        if canonical == "notice_date":
             continue
-        col = raw if raw in available else next((c for c in df.columns if c.upper() == raw.upper()), None)
+        candidates = want if isinstance(want, tuple) else (want,)
+        col = None
+        for cand in candidates:
+            col = cand if cand in available else next(
+                (c for c in df.columns if c.upper() == cand.upper()), None)
+            if col:
+                break
         if col is None:
+            # 不报错：金融业没有营业成本、没有流动资产负债概念，缺失是行业差异不是故障。
             out[canonical] = pd.NA
+            unmatched.append(canonical)
             continue
         out[canonical] = pd.to_numeric(df[col], errors="coerce")
 
-    missing = [c for c in colmap if c not in out.columns and c != "notice_date"]
-    if missing:
-        raise KeyError(f"{table} 缺少映射列 {missing}——接口列名可能已变更，去更新 fields.py")
+    # 只有当收入、总资产、归母权益同时取不到时才判定接口变更——单科目缺失是正常现象
+    if {"revenue", "total_assets", "parent_profit"} <= set(unmatched) or "parent_profit" in unmatched:
+        raise KeyError(
+            f"{table} 关键科目全部未命中（{unmatched}）——东财列名可能已变更，去更新 fields.py"
+        )
 
     # 审计意见不是数值科目，单独透传，否则 canonical 帧里取不到
     if AUDIT_OPINION_COLUMN in available:
