@@ -59,6 +59,8 @@ def data_dir() -> Path:
 
 DB_PATH = Path(os.environ.get("FW_DB", str(data_dir() / "workbench.duckdb")))
 
-# 自选池。与 vest 的 followup_queue 合并后构成实际取数范围。
-WATCHLIST_FILE = Path(os.environ.get("FW_WATCHLIST", str(data_dir() / "watchlist.csv")))
-VEST_DB = Path(os.environ.get("VEST_DB_PATH", "")) if os.environ.get("VEST_DB_PATH") else None
+# 自选池放在项目根而不是 data/ 下：它是用户要看得见、要亲手编辑的配置文件，
+# 而 data/ 整个被 gitignore。compose 也按根目录挂载。
+ROOT = Path(__file__).resolve().parents[2]
+WATCHLIST_FILE = Path(os.environ.get("FW_WATCHLIST", str(ROOT / "watchlist.csv")))
+VEST_DB = Path(os.environ["VEST_DB_PATH"]) if os.environ.get("VEST_DB_PATH") else None
